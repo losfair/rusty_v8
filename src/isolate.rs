@@ -141,6 +141,10 @@ extern "C" {
   fn v8__Isolate__Exit(this: *mut Isolate);
   fn v8__Isolate__ClearKeptObjects(isolate: *mut Isolate);
   fn v8__Isolate__LowMemoryNotification(isolate: *mut Isolate);
+  fn v8__Isolate__IdleNotificationDeadline(
+    isolate: *mut Isolate,
+    deadline_in_seconds: f64,
+  );
   fn v8__Isolate__GetHeapStatistics(this: *mut Isolate, s: *mut HeapStatistics);
   fn v8__Isolate__SetCaptureStackTraceForUncaughtExceptions(
     this: *mut Isolate,
@@ -437,6 +441,22 @@ impl Isolate {
   /// V8 uses these notifications to attempt to free memory.
   pub fn low_memory_notification(&mut self) {
     unsafe { v8__Isolate__LowMemoryNotification(self) }
+  }
+
+  /// Optional notification that the embedder is idle.
+  /// V8 uses the notification to perform garbage collection.
+  /// This call can be used repeatedly if the embedder remains idle. Returns
+  /// true if the embedder should stop calling IdleNotificationDeadline until
+  /// real work has been done. This indicates that V8 has done as much cleanup
+  /// as it will be able to do.
+  ///
+  /// The deadline_in_seconds argument specifies the deadline V8 has to finish
+  /// garbage collection work. deadline_in_seconds is compared with
+  /// MonotonicallyIncreasingTime() and should be based on the same timebase as
+  /// that function. There is no guarantee that the actual work will be done
+  /// within the time limit.
+  pub fn idle_notification_deadline(&mut self, deadline_in_seconds: f64) {
+    unsafe { v8__Isolate__IdleNotificationDeadline(self, deadline_in_seconds) }
   }
 
   /// Get statistics about the heap memory usage.

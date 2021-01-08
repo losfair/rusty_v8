@@ -23,6 +23,8 @@ extern "C" {
   fn v8__V8__Initialize();
   fn v8__V8__Dispose() -> bool;
   fn v8__V8__ShutdownPlatform();
+
+  fn v8__Platform__MonotonicallyIncreasingTime(platform: *mut Platform) -> f64;
 }
 
 /// EntropySource is used as a callback function when v8 needs a source
@@ -74,6 +76,7 @@ use GlobalState::*;
 lazy_static! {
   static ref GLOBAL_STATE: Mutex<GlobalState> =
     Mutex::new(GlobalState::Uninitialized);
+  static ref PLATFORM: Mutex<Option<UniqueRef<Platform>>> = Mutex::new(None);
 }
 
 pub fn assert_initialized() {
@@ -178,10 +181,15 @@ pub fn get_version() -> &'static str {
 // V8::ShutdownPlatform is called.
 /// Sets the v8::Platform to use. This should be invoked before V8 is
 /// initialized.
-pub fn initialize_platform(platform: UniqueRef<Platform>) {
+pub fn initialize_platform(mut platform: UniqueRef<Platform>) {
   let mut global_state_guard = GLOBAL_STATE.lock().unwrap();
   assert_eq!(*global_state_guard, Uninitialized);
-  unsafe { v8__V8__InitializePlatform(platform.into_raw()) };
+  unsafe { v8__V8__InitializePlatform(platform.as_mut()) };
+
+  let mut global_platform = PLATFORM.lock().unwrap();
+  assert!(global_platform.is_none());
+  *global_platform = Some(platform);
+
   *global_state_guard = PlatformInitialized;
 }
 
@@ -221,4 +229,18 @@ pub fn shutdown_platform() {
   assert_eq!(*global_state_guard, Disposed);
   unsafe { v8__V8__ShutdownPlatform() };
   *global_state_guard = PlatformShutdown;
+}
+
+/// Monotonically increasing time in seconds from an arbitrary fixed point
+/// in the past. This function is expected to return at least
+/// millisecond-precision values. For this reason, it is recommended that
+/// the fixed point be no further in the past than the epoch.
+pub fn monotonically_increasing_time() -> f64 {
+  let mut global_platform = PLATFORM.lock().unwrap();
+  assert!(global_platform.is_some());
+  unsafe {
+    v8__Platform__MonotonicallyIncreasingTime(
+      global_platform.as_mut().unwrap().as_mut(),
+    )
+  }
 }

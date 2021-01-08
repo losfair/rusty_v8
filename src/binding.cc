@@ -122,6 +122,10 @@ bool v8__V8__Dispose() { return v8::V8::Dispose(); }
 
 void v8__V8__ShutdownPlatform() { v8::V8::ShutdownPlatform(); }
 
+double v8__Platform__MonotonicallyIncreasingTime(v8::Platform* platform) {
+  return platform->MonotonicallyIncreasingTime();
+}
+
 v8::Isolate* v8__Isolate__New(const v8::Isolate::CreateParams& params) {
   return v8::Isolate::New(params);
 }
@@ -138,6 +142,11 @@ void v8__Isolate__ClearKeptObjects(v8::Isolate* isolate) {
 
 void v8__Isolate__LowMemoryNotification(v8::Isolate* isolate) {
   isolate->LowMemoryNotification();
+}
+
+void v8__Isolate__IdleNotificationDeadline(v8::Isolate* isolate,
+                                           double deadline_in_seconds) {
+  isolate->IdleNotificationDeadline(deadline_in_seconds);
 }
 
 void v8__Isolate__GetHeapStatistics(v8::Isolate* isolate,
