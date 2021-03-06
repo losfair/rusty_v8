@@ -27,8 +27,8 @@ use crate::ScriptOrModule;
 use crate::String;
 use crate::Value;
 
-use std::any::Any;
 use std::any::TypeId;
+use std::{any::Any, cell::UnsafeCell, collections::HashSet, thread::ThreadId};
 
 use std::collections::HashMap;
 use std::ffi::c_void;
@@ -274,6 +274,12 @@ extern "C" {
     s: *const HeapStatistics,
   ) -> usize;
   fn v8__HeapStatistics__does_zap_garbage(s: *const HeapStatistics) -> usize;
+
+  fn v8__Locker__CONSTRUCT(
+    buf: *mut MaybeUninit<Locker>,
+    isolate: *mut Isolate,
+  );
+  fn v8__Locker__DESTRUCT(buf: *mut Locker);
 }
 
 /// Isolate represents an isolated instance of the V8 engine.  V8 isolates have
@@ -889,6 +895,149 @@ impl Deref for OwnedIsolate {
 impl DerefMut for OwnedIsolate {
   fn deref_mut(&mut self) -> &mut Self::Target {
     unsafe { self.cxx_isolate.as_mut() }
+  }
+}
+
+#[repr(C)]
+struct Locker([usize; 2]);
+
+impl Drop for Locker {
+  fn drop(&mut self) {
+    unsafe {
+      v8__Locker__DESTRUCT(self);
+    }
+  }
+}
+
+/// An owned isolate that can be shared across threads.
+#[derive(Debug)]
+pub struct SharedIsolate {
+  owned_isolate: UnsafeCell<OwnedIsolate>,
+}
+
+unsafe impl Send for SharedIsolate {}
+unsafe impl Sync for SharedIsolate {}
+
+impl SharedIsolate {
+  /// Creates a `SharedIsolate` from an `OwnedIsolate`.
+  pub fn new(mut owned_isolate: OwnedIsolate) -> Self {
+    unsafe {
+      owned_isolate.exit();
+    }
+    Self {
+      owned_isolate: UnsafeCell::new(owned_isolate),
+    }
+  }
+
+  pub fn lock(&self) -> SharedIsolateGuard<&Self> {
+    SharedIsolateGuard::new(self)
+  }
+
+  pub fn lock_owned(self: Arc<Self>) -> SharedIsolateGuard<Arc<Self>> {
+    SharedIsolateGuard::new(self)
+  }
+}
+
+impl Drop for SharedIsolate {
+  fn drop(&mut self) {
+    unsafe {
+      (*self.owned_isolate.get()).enter(); // so that we can drop
+    }
+  }
+}
+
+/// A
+pub struct SharedIsolateGuard<I>
+where
+  I: Deref<Target = SharedIsolate>,
+{
+  inner: I,
+  locker: Locker,
+}
+
+/// Prevents re-entering the same isolate from a thread.
+#[derive(Default)]
+struct SharedIsolateEntryRegistry {
+  active_threads: HashSet<ThreadId>,
+}
+
+impl SharedIsolateEntryRegistry {
+  fn get(isolate: &mut Isolate) -> &mut Self {
+    // Work around lifetime issues.
+    if isolate.get_slot_mut::<Self>().is_none() {
+      isolate.set_slot(Self::default());
+    }
+    isolate.get_slot_mut::<Self>().unwrap()
+  }
+
+  fn register(&mut self) {
+    let tid = std::thread::current().id();
+    if self.active_threads.contains(&tid) {
+      panic!("attempting to re-enter a SharedIsolate from the same thread");
+    }
+    self.active_threads.insert(tid);
+  }
+
+  fn unregister(&mut self) {
+    let tid = std::thread::current().id();
+    assert_eq!(self.active_threads.remove(&tid), true);
+  }
+}
+
+impl<I> SharedIsolateGuard<I>
+where
+  I: Deref<Target = SharedIsolate>,
+{
+  fn new(inner: I) -> Self {
+    let isolate: &mut Isolate =
+      unsafe { &mut *inner.deref().owned_isolate.get() };
+
+    let mut locker: MaybeUninit<Locker> = MaybeUninit::uninit();
+    unsafe {
+      v8__Locker__CONSTRUCT(&mut locker, isolate);
+    }
+    let locker = unsafe { locker.assume_init() };
+
+    SharedIsolateEntryRegistry::get(isolate).register();
+
+    unsafe {
+      isolate.enter();
+    }
+    Self { inner, locker }
+  }
+}
+
+impl<I> Deref for SharedIsolateGuard<I>
+where
+  I: Deref<Target = SharedIsolate>,
+{
+  type Target = Isolate;
+
+  fn deref(&self) -> &Self::Target {
+    unsafe { &*self.inner.deref().owned_isolate.get() }
+  }
+}
+
+impl<I> DerefMut for SharedIsolateGuard<I>
+where
+  I: Deref<Target = SharedIsolate>,
+{
+  fn deref_mut(&mut self) -> &mut Self::Target {
+    unsafe { &mut *self.inner.deref().owned_isolate.get() }
+  }
+}
+
+impl<I> Drop for SharedIsolateGuard<I>
+where
+  I: Deref<Target = SharedIsolate>,
+{
+  fn drop(&mut self) {
+    let isolate: &mut Isolate =
+      unsafe { &mut *self.inner.deref().owned_isolate.get() };
+    SharedIsolateEntryRegistry::get(isolate).unregister();
+    unsafe {
+      isolate.exit();
+    }
   }
 }
 

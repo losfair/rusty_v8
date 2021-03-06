@@ -1,6 +1,5 @@
 // Copyright 2019-2021 the Deno authors. All rights reserved. MIT license.
 use lazy_static::lazy_static;
-use std::any::type_name;
 use std::cell::RefCell;
 use std::collections::hash_map::DefaultHasher;
 use std::convert::{Into, TryFrom, TryInto};
@@ -8,6 +7,7 @@ use std::ffi::c_void;
 use std::hash::Hash;
 use std::ptr::NonNull;
 use std::sync::atomic::{AtomicUsize, Ordering};
+use std::{any::type_name, sync::Arc};
 
 use rusty_v8 as v8;
 // TODO(piscisaureus): Ideally there would be no need to import this trait.
@@ -4893,4 +4893,28 @@ fn code_cache() {
     v8::Local::<v8::String>::try_from(top.get(&mut scope, key.into()).unwrap())
       .unwrap();
   assert_eq!(&value.to_rust_string_lossy(&mut scope), "world");
+}
+
+#[test]
+fn shared_isolate() {
+  let _setup_guard = setup();
+  let isolate =
+    Arc::new(v8::SharedIsolate::new(v8::Isolate::new(Default::default())));
+  let mut join_handles = vec![];
+  for _ in 0..100 {
+    let isolate = isolate.clone();
+    let handle = std::thread::spawn(move || {
+      let mut isolate = isolate.lock_owned();
+      let scope = &mut v8::HandleScope::new(&mut *isolate);
+      let context = v8::Context::new(scope);
+      let scope = &mut v8::ContextScope::new(scope, context);
+      let source = v8::String::new(scope, "1 + 2").unwrap();
+      let script = v8::Script::compile(scope, source, None).unwrap();
+      assert_eq!(script.run(scope).unwrap().uint32_value(scope).unwrap(), 3);
+    });
+    join_handles.push(handle);
+  }
+  for handle in join_handles {
+    handle.join().unwrap();
+  }
 }

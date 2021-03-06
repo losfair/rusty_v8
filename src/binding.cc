@@ -321,6 +321,14 @@ size_t v8__Isolate__CreateParams__SIZEOF() {
   return sizeof(v8::Isolate::CreateParams);
 }
 
+void v8__Locker__CONSTRUCT(uninit_t<v8::Locker>* buf, v8::Isolate* isolate) {
+  construct_in_place<v8::Locker>(buf, isolate);
+}
+
+void v8__Locker__DESTRUCT(v8::Locker *buf) {
+  buf->~Locker();
+}
+
 void v8__ResourceConstraints__ConfigureDefaultsFromHeapSize(
     v8::ResourceConstraints* constraints, size_t initial_heap_size_in_bytes,
     size_t maximum_heap_size_in_bytes) {
